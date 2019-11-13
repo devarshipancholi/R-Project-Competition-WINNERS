@@ -1,0 +1,95 @@
+---
+title: "Untitled"
+author: "Devarshi Pancholi"
+date: "11/11/2019"
+output: pdf_document
+---
+
+```{r}
+library(dplyr)
+final= read.csv("/Users/devarshipancholi/Desktop/dataset5.csv")
+
+str(final)
+
+dataset <- select(final,
+                  code_module,code_presentation,gender,
+                  region,highest_education,imd_band,
+                  studied_credits,num_of_prev_attempts,
+                  age_band,disability,sum_click,assessment_type,score,weight,final_result)
+
+
+target <- ("final_result")
+dependent <- (names(dataset)[names(dataset) != target])
+
+library(ROSE)
+
+set.seed(1234)
+split <- (.70)
+library (caret)
+library(kernlab)
+library(xgboost)
+index <- createDataPartition(dataset$final_result, p=split, list=FALSE)
+
+train.df <- as.data.frame(dataset[ index,])
+library(DMwR)
+train_smote <- SMOTE( final_result ~ ., train.df, perc.over = 100, perc.under = 200)
+prop.table(table(train_smote$final_result))
+train.df = train_smote
+test.df <- as.data.frame(dataset[ -index,])
+
+#train.under<-ovun.sample(APPLICANT ~., data = train.df, method = "under", N= 1000)$data
+#prop.table(table(train.under$APPLICANT))
+
+#admit$APPLICANT<-as.factor(admit$APPLICANT)
+
+#fitControl <- trainControl(method = "cv", number = 20, sampling = "up", classProbs = TRUE)
+
+#lm <- (train(train.df[,dependent],train.df[,target], method='glm'))
+gbm <- train(train.df[,dependent],train.df[,target], method='gbm')
+
+summary(gbm)
+
+```
+
+```{r}
+
+gbm.predict <- predict(gbm,test.df[,dependent],type="raw")
+#lm.predict <- predict(lm,test.df[,dependent],type="raw")
+#summary(gbm.predict)
+
+
+
+r <- data.frame(Actual = test.df$final_result , Prediction = gbm.predict)
+r <- table(r)
+r
+
+accuracy <- (r[1,1] + r[2,2])/sum(r)
+accuracy
+
+precision <- (r[2,2]/(r[2,2] + r[1,2]))
+precision
+
+recall <- (r[2,2]/(r[2,2] + r[2,1]))
+recall
+
+f_score <- 2*((precision*recall)/(precision+recall))
+f_score
+
+g_score <- sqrt(precision*recall)
+g_score
+
+library(pROC)
+
+gbm.probs <- predict(gbm,test.df[,dependent],type="prob")    
+#rf.probs <- predict(rf,test.df[,dependent],type="prob") 
+
+gbm.plot<-plot(roc(test.df$final_result,gbm.probs[,2]))
+#rf.plot<-lines(roc(test.df$final_result,rf.probs[,2]), col="blue")
+
+confusionMatrix(gbm.predict,test.df[,target], positive = "Pass")
+multiclass.roc(test.df$final_result, predict(gbm, test.df[,dependent], type= "prob", percent=FALSE))
+
+confusionMatrix(lm.predict,test.df[,target], positive = "Pass")
+multiclass.roc(test.df$final_result, predict(lm, test.df[,dependent], type= "prob", percent=FALSE))
+
+```

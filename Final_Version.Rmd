@@ -1,0 +1,514 @@
+---
+title: "Project 2"
+author: "Group 5"
+date: "11/10/2019"
+output: html_document
+---
+
+# Version One
+
+# library packages
+```{r}
+library(dplyr)
+library(dataQualityR)
+library(readr)
+library(tidyr)
+library(randomForest)
+library(DMwR)
+library(ROSE)
+library(pROC)
+```
+
+# Data Cleaning
+# load data
+```{r}
+s_asmt <- read.csv("studentAssessment.csv")
+asmt <- read_csv("assessments.csv") 
+studentVle <- read_csv("studentVle.csv")
+info <- read_csv("studentInfo.csv")
+```
+
+# clean studentVle (sum_click)
+```{r}
+# clean the outlier 
+median <- median(studentVle$sum_click)
+mean <- mean(studentVle$sum_click)
+sd <- sd(studentVle$sum_click)
+studentVle <- subset(studentVle, studentVle$sum_click < (3 * sd + mean) & studentVle$sum_click > (-3 * sd + mean))
+
+# average the sum_click for each student in each module and presentation
+student_vle_group <- studentVle %>%
+  group_by(id_student, code_module, code_presentation) %>%
+  summarize(sum_click = mean(sum_click))
+```
+
+# student_info 
+```{r}
+info <- info[, -1]
+info$imd_band[info$imd_band =="20-Oct"] <- as.character("10-20%")
+info$imd_band <- as.factor(info$imd_band)
+info$age_band <- as.factor(info$age_band)
+info$disability <- as.factor(info$disability)
+info$code_module <- as.factor(info$code_module)
+info$code_presentation <- as.factor(info$code_presentation)
+info$gender <- as.factor(info$gender)
+info$region <- as.factor(info$region)
+info$highest_education <- as.factor(info$highest_education)
+info$num_of_prev_attempts <- as.factor(info$num_of_prev_attempts)
+info$studied_credits <- as.factor(info$studied_credits)
+info$final_result <- as.factor(info$final_result)
+info <- subset(info, final_result != "Withdrawn") # delete withdrawn student
+info$final_result <- factor(info$final_result) # drop "Withdrawn" level
+info$final_result[info$final_result == "Distinction"] <- "Pass"
+info$final_result <- factor(info$final_result) # drop "Distinction" level
+```
+
+# join data (first)
+```{r}
+# first join std_asmt and asmt to get weight and score
+student_assessment <- left_join(s_asmt, asmt, by.x = "id_assessment", by.y = "id_assessment")
+student_assessment$code_module <- as.factor(student_assessment$code_module)
+student_assessment$code_presentation <- as.factor(student_assessment$code_presentation)
+# then get final result 
+pf_asmt <- left_join(info, student_assessment, by.x = "id_student", by.y = "id_student")
+pf_asmt = na.omit(pf_asmt)  
+```
+
+# calculate avg score and weight 
+```{r}
+# for each student, module, and each presentation, find the avg score and weight of each asmt_type
+pf_asmt1 <- pf_asmt %>%
+  group_by(id_student, code_module, code_presentation, assessment_type) %>%
+  summarize(score = mean(score), weight = mean(weight))
+```
+
+# join data (second)
+```{r}
+pf_asmt1$code_module <- as.factor(pf_asmt1$code_module)
+pf_asmt1$code_presentation <- as.factor(pf_asmt1$code_presentation)
+student_vle_group$code_module <- as.factor(student_vle_group$code_module)
+student_vle_group$code_presentation <- as.factor(student_vle_group$code_presentation)
+
+# add score and weight into info table
+df1 <- left_join(info, pf_asmt1, by = c("id_student", "code_module", "code_presentation"))
+# add avg click 
+df2 <- left_join(df1, student_vle_group, by = c("id_student","code_module","code_presentation"))
+#df3 <- na.omit(df2)
+df3 <- drop_na(df2)
+```
+
+# Modeling
+# preparing for model
+```{r}
+# select variables in the df3
+dataset <- select(df3, 
+                  code_module, code_presentation, gender, region, highest_education, imd_band,
+                  studied_credits, num_of_prev_attempts, age_band, disability, assessment_type,
+                  sum_click, weight, score, final_result)
+
+set.seed(12345) 
+split <- (.7)
+index <- createDataPartition(dataset$final_result, p = split, list = FALSE)
+train.df <- dataset[index, ] # training data
+test.df <- dataset[-index, ] # testing data
+
+train.df$studied_credits <- as.integer(train.df$studied_credits)
+test.df$studied_credits <- as.integer(test.df$studied_credits)
+train.df <- train.df %>% mutate_if(is.character, as.factor)
+test.df <- test.df %>% mutate_if(is.character, as.factor)
+
+prop.table(table(train.df$final_result))
+
+train.under <- ovun.sample(final_result~., data = train.df, method = "under", N = 9502)$data
+prop.table(table(train.under$final_result))
+
+train.over <- ovun.sample(final_result~., data = train.df, method = "over", N = 28624)$data
+prop.table(table(train.under$final_result))
+
+train.both <- ovun.sample(final_result~., data = train.df, method = "both", N = 28624)$data
+prop.table(table(train.both$final_result))
+```
+
+# random forest
+```{r}
+rf_model1 <- randomForest(final_result ~ .,
+                          data = train.df, 
+                          ntree = 100)
+rf_predict1 <- predict(rf_model1, test.df)
+
+rf_model2 <- randomForest(final_result ~ .,
+                          data = train.under, 
+                          ntree = 100)
+rf_predict2 <- predict(rf_model2, test.df)
+
+rf_model3 <- randomForest(final_result ~ .,
+                          data = train.over, 
+                          ntree = 100)
+rf_predict3 <- predict(rf_model3, test.df)
+
+rf_model4 <- randomForest(final_result ~ .,
+                          data = train.both, 
+                          ntree = 100)
+rf_predict4 <- predict(rf_model4, test.df)
+
+confusionMatrix(rf_predict1, test.df$final_result, positive = "Pass")
+confusionMatrix(rf_predict2, test.df$final_result, positive = "Pass")
+confusionMatrix(rf_predict3, test.df$final_result, positive = "Pass")
+confusionMatrix(rf_predict4, test.df$final_result, positive = "Pass")
+```
+
+```{r}
+varImpPlot(rf_model3)
+
+outcomeName <- 'final_result'
+predictorNames <- names(dataset)[names(dataset) != outcomeName]
+
+rf.probs <- predict(rf_model3, test.df[, predictorNames], type = "prob")    
+rf.plot <- plot(roc(test.df$final_result, rf.probs[, 2]))
+auc(test.df$final_result,rf.probs[, 2])
+```
+
+# gbm model
+```{r}
+fitControl <- trainControl(method = "cv", number = 20, sampling = "up", classProbs = TRUE)
+
+#lm <- (train(train.df[,dependent],train.df[,target], method='glm'))
+gbm <- train(train.df[,dependent],train.df[,target], method='gbm', trControl = fitControl)
+summary(gbm)
+  
+gbm.predict <- predict(gbm,test.df[,dependent],type="raw")
+#lm.predict <- predict(lm,test.df[,dependent],type="raw")
+#summary(gbm.predict)
+
+r <- data.frame(Actual = test.df$final_result , Prediction = gbm.predict)
+r <- table(r)
+
+gbm.probs <- predict(gbm,test.df[,dependent],type="prob")    
+gbm.plot<-plot(roc(test.df$final_result,gbm.probs[,2]))
+confusionMatrix(gbm.predict,test.df[,target], positive = "Pass")
+multiclass.roc(test.df$final_result, predict(gbm, test.df[,dependent], type= "prob", percent=FALSE))
+```
+
+# svm model
+```{r}
+svm = svm(formula = final_result ~ .,
+           data = train.df,
+           type = 'C-classification',
+           kernel = 'radial')
+
+svm.predict <- predict(svm,test.df[,dependent], probability = TRUE)
+confusionMatrix(svm.predict,test.df[,target])
+r <- data.frame(Actual = test.df$final_result , Prediction = svm.predict)
+r <- table(r)
+
+multiclass.roc(test.df$final_result, predict(svm, test.df[,dependent], type= "prob", percent=FALSE))
+roc_obj <- roc(test.df$final_result, predict(dt, test.df[,dependent], type= "vector", percent=FALSE))
+auc(roc_obj)
+svm.probs <- predict(svm,test.df[,dependent],type="prob") 
+```
+
+# dt model
+```{r}
+dt <-rpart(final_result ~.,data = train.df, method = "class")
+dt
+
+dt.predict <-predict(dt,test.df,type="class")
+test.df$final_result<-as.factor(test.df1$final_result)
+require(caret)
+confusionMatrix(dt.predict,test.df$final_result)
+r <- data.frame(Actual = test.df$final_result , Prediction = dt.predict)
+r <- table(r)
+r
+precision <- (r[2,2]/(r[2,2] + r[1,2]))
+precision
+
+multiclass.roc(test.df$final_result, predict(dt, test.df[,dependent], type= "prob", percent=FALSE))
+```
+
+# bayes model
+```{r}
+bayes <-naiveBayes(final_result ~.,data = train.df, control=rpart.control(minsplit=2, minbucket=1, cp=0.001))
+
+bayes.predict <- predict(bayes,test.df)
+test.df$final_result <- as.factor(test.df$final_result)
+bayes.predict <-as.factor(bayes.predict)
+
+require(caret)
+confusionMatrix(bayes.predict,test.df$final_result)
+r <- data.frame(Actual = test.df$final_result , Prediction = bayes.predict)
+r <- table(r)
+
+precision <- (r[2,2]/(r[2,2] + r[1,2]))
+               
+multiclass.roc(test.df$final_result, predict(bayes, test.df[,dependent], type= "raw", percent=FALSE))
+```
+
+
+# predict test data using random forest
+```{r}
+avg <- pf_asmt %>%
+  group_by(code_module, code_presentation) %>%
+  summarize(avg_score = mean(score), avg_weight = mean(weight))
+
+test <- read.csv("test.csv")
+
+test1 <- left_join(test, avg, by = c("code_module", "code_presentation"))
+
+test1$score[is.na(test1$score)] <- 200
+for (i in 1:nrow(test1)) {
+  if (test1$score[i] == 200)
+    test1$score[i] = test1$avg_score[i]
+  else
+    test1$score[i] = test1$score[i] 
+}
+
+test1$weight[is.na(test1$weight)] <- 200
+for (i in 1:nrow(test1)) {
+  if (test1$weight[i] == 200)
+    test1$weight[i] = test1$avg_weight[i]
+  else
+    test1$weight[i] = test1$weight[i] 
+}
+
+# check which assessment_type is most likely to be for each module and presentation
+type <- pf_asmt %>%
+  group_by(code_module, code_presentation, assessment_type) %>%
+  summarize(total = n())
+
+type2 <- data.frame("code_module" = c("AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG"), 
+                    "assessment_type2" = c("TMA", "TMA", "TMA", "TMA", "TMA", "CMA", "CMA"))
+
+test2 <- left_join(test1, type2, by.x = "code_module", by.y = "code_module")
+
+test2$assessment_type <- as.character(test2$assessment_type)
+test2$assessment_type2 <- as.character(test2$assessment_type2)
+test2$assessment_type[is.na(test2$assessment_type)] <- "DN"
+
+for (i in 1:nrow(test2)) {
+  if (test2$assessment_type[i] == "DN")
+    test2$assessment_type[i] = test2$assessment_type2[i]
+  else
+    test2$assessment_type[i] = test2$assessment_type[i]
+}
+
+test2$assessment_type <- as.factor(test2$assessment_type)
+
+test_final <- select(test2, 
+                  code_module, code_presentation, gender, region, highest_education,
+                  imd_band, studied_credits, num_of_prev_attempts, age_band, disability,
+                  assessment_type, sum_click, weight, score)
+
+test_final$imd_band <- as.character(test_final$imd_band)
+test_final$imd_band[test_final$imd_band == "20-Oct"] <- "10-20%"
+test_final$imd_band[test_final$imd_band == ""] <- "10-20%"
+test_final$imd_band <- as.factor(test_final$imd_band)
+
+test_final$num_of_prev_attempts <- as.factor(test_final$num_of_prev_attempts)
+levels(test_final$num_of_prev_attempts) <- levels(train.over$num_of_prev_attempts)
+
+test_final$sum_click[is.na(test_final$sum_click)] <- 3
+
+levels(test_final$code_module) <- levels(test.df$code_module)
+levels(test_final$code_presentation) <- levels(test.df$code_presentation)
+levels(test_final$gender) <- levels(test.df$gender)
+levels(test_final$highest_education) <- levels(test.df$highest_education)
+levels(test_final$imd_band) <- levels(test.df$imd_band)
+levels(test_final$age_band) <- levels(test.df$age_band)
+levels(test_final$disability) <- levels(test.df$disability)
+levels(test_final$assessment_type) <- levels(test.df$assessment_type)
+
+test_final$sum_click <- as.numeric(test_final$sum_click)
+
+write.csv(test_final,"/Users/Cecilia/Desktop/BA (Tu)/Project 2/test_final.csv")
+```
+
+```{r}
+test_predict <- predict(rf_model3, test_final)
+test_predict <- as.data.frame(test_predict)
+write.csv(test_predict,"/Users/Cecilia/Desktop/BA (Tu)/Project 2/test_predict_answer.csv")
+```
+
+
+# Version Two
+
+# load data
+```{r}
+assessments <- read_csv("assessments.csv")
+studentAssessment <- read_csv("studentAssessment.csv")
+studentRegistration <- read_csv("studentRegistration.csv")
+studentVle <- read_csv("studentVle.csv")
+vle <- read_csv("vle.csv")
+studentInfo <- read_csv("studentInfo.csv")
+studentInfo <-  subset(studentInfo, final_result != "Withdrawn")
+info <-  as.data.frame(studentInfo)
+```
+
+```{r}
+info <- info[, -1]
+info$imd_band[info$imd_band =="20-Oct"] <- as.character("10-20%")
+info$imd_band <- as.factor(info$imd_band)
+info$age_band <- as.factor(info$age_band)
+info$disability <- as.factor(info$disability)
+info$code_module <- as.factor(info$code_module)
+info$code_presentation <- as.factor(info$code_presentation)
+info$gender <- as.factor(info$gender)
+info$region <- as.factor(info$region)
+info$highest_education <- as.factor(info$highest_education)
+info$num_of_prev_attempts <- as.factor(info$num_of_prev_attempts)
+info$studied_credits <- as.factor(info$studied_credits)
+info$final_result <- as.factor(info$final_result)
+info <- subset(info, final_result != "Withdrawn") # delete withdrawn student
+info$final_result <- factor(info$final_result) # drop "Withdrawn" level
+info$final_result[info$final_result == "Distinction"] <- "Pass"
+info$final_result <- factor(info$final_result) # drop "Distinction" level
+```
+
+# join data (first)
+```{r}
+dataset <- left_join(studentAssessment, assessments, by.x = "id_assessment", by.y = "id_assessment" )
+dataset1 <- left_join(info, dataset, by.x = "id_student", by.y = "id_student" )
+dataset2 <- left_join(studentVle, vle, by.x = "id_site", by.y = "id_site" )
+dataset3 <- left_join(dataset1, dataset2, by.x = "id_student", by.y = "id_student" )
+dataset3$week_from = NULL
+dataset3$week_to = NULL
+dataset4 = na.omit(dataset3) # Removing Duplicates
+prop.table(table(dataset4$final_result))
+```
+
+
+# preparing for model
+```{r}
+# select variables in the df3
+dataset5 <- select(dataset4, 
+                  code_module, code_presentation, gender, region, highest_education, imd_band,
+                  studied_credits, num_of_prev_attempts, age_band, disability, assessment_type,activity_type,
+                  sum_click, weight, score, final_result)
+
+set.seed(12345)
+split <- (.5)
+index <- createDataPartition(dataset5$final_result, p = split, list = FALSE)
+train.df <- dataset5[index, ] # training data
+test.df <- dataset5[-index, ] # testing data
+
+train.df$studied_credits <- as.integer(train.df$studied_credits)
+test.df$studied_credits <- as.integer(test.df$studied_credits)
+train.df <- train.df %>% mutate_if(is.character, as.factor)
+test.df <- test.df %>% mutate_if(is.character, as.factor)
+
+v = table(train.df$final_result)
+
+train.under <- ovun.sample(final_result~., data = train.df, method = "under", N = v[1]*2)$data
+prop.table(table(train.under$final_result))
+
+train.over <- ovun.sample(final_result~., data = train.df, method = "over", N = v[2]*2)$data
+prop.table(table(train.under$final_result))
+
+train.both <- ovun.sample(final_result~., data = train.df, method = "both", N = v[2]*2)$data
+prop.table(table(train.both$final_result))
+
+test.df <- rbind(train.df[1, ] , test.df)
+test.df <- test.df[-1,]
+```
+
+# random forest
+```{r}
+rf_model1 <- randomForest(final_result ~ .,
+                          data = train.df, 
+                          ntree = 100)
+summary(rf_model1)
+varImpPlot(rf_model1)
+rf_predict1 <- predict(rf_model1, test.df)
+
+rf_model2 <- randomForest(final_result ~ .,
+                          data = train.under, 
+                          ntree = 100)
+varImpPlot(rf_model2)
+rf_predict2 <- predict(rf_model2, test.df)
+
+rf_model3 <- randomForest(final_result ~ .,
+                          data = train.over, 
+                          ntree = 100)
+varImpPlot(rf_model3)
+str(test.df)
+rf_predict3 <- predict(rf_model3, test.df)
+
+rf_model4 <- randomForest(final_result ~ .,
+                          data = train.both, 
+                          ntree = 100)
+varImpPlot(rf_model4)
+rf_predict4 <- predict(rf_model4, test.df)
+
+multiclass.roc(test.df$final_result, predict(rf_model1, test.df[,1:15], type= "prob", percent=FALSE))
+confusionMatrix(rf_predict1, test.df$final_result, positive = "Pass") 
+confusionMatrix(rf_predict2, test.df$final_result, positive = "Pass")
+confusionMatrix(rf_predict3, test.df$final_result, positive = "Pass")
+confusionMatrix(rf_predict4, test.df$final_result, positive = "Pass")
+```
+
+```{r}
+outcomeName <- 'final_result'
+predictorNames <- names(dataset5)[names(dataset5) != outcomeName]
+
+rf.probs <- predict(rf_model2, test.df[, predictorNames], type = "prob")    
+rf.plot <- plot(roc(test.df$final_result, rf.probs[, 2]))
+auc(test.df$final_result,rf.probs[, 2])
+```
+
+# predict test data
+```{r}
+test_final2 <- select(test2, 
+                  code_module, code_presentation, gender, region, highest_education,
+                  imd_band, studied_credits, num_of_prev_attempts, age_band, disability,
+                  assessment_type, activity_type, sum_click, weight, score)
+
+test_final2$imd_band <- as.character(test_final2$imd_band)
+test_final2$imd_band[test_final2$imd_band == "20-Oct"] <- "10-20%"
+test_final2$imd_band[test_final2$imd_band == ""] <- "10-20%"
+test_final2$imd_band <- as.factor(test_final2$imd_band)
+
+test_final2$num_of_prev_attempts <- as.factor(test_final2$num_of_prev_attempts)
+levels(test_final2$num_of_prev_attempts) <- levels(train.over$num_of_prev_attempts)
+
+test_final2$sum_click[is.na(test_final2$sum_click)] <- 3
+
+levels(test_final2$code_module) <- levels(test.df$code_module)
+levels(test_final2$code_presentation) <- levels(test.df$code_presentation)
+levels(test_final2$gender) <- levels(test.df$gender)
+levels(test_final2$highest_education) <- levels(test.df$highest_education)
+levels(test_final2$imd_band) <- levels(test.df$imd_band)
+levels(test_final2$age_band) <- levels(test.df$age_band)
+levels(test_final2$disability) <- levels(test.df$disability)
+levels(test_final2$assessment_type) <- levels(test.df$assessment_type)
+
+test_final2$sum_click <- as.numeric(test_final2$sum_click)
+
+test_final2$activity_type[is.na(test_final2$activity_type)] <- "homepage"
+```
+
+```{r}
+prof_test <- select(test_final2, 
+                  code_module, code_presentation, gender, region, highest_education, imd_band,
+                  studied_credits, num_of_prev_attempts, age_band, disability, assessment_type,activity_type,
+                  sum_click, weight, score)
+
+prof_test$studied_credits <- as.integer(prof_test$studied_credits)
+prof_test$studied_credits <- as.integer(prof_test$studied_credits)
+prof_test$num_of_prev_attempts <- as.factor(prof_test$num_of_prev_attempts)
+prof_test <- prof_test %>% mutate_if(is.character, as.factor)
+prof_test <- prof_test %>% mutate_if(is.character, as.factor)
+
+str(prof_test)
+str(train.df)
+levels(prof_test$activity_type ) <- levels(train.df$activity_type)
+levels(prof_test$num_of_prev_attempts ) <- levels(train.df$num_of_prev_attempts)
+test_predict <- predict(rf_model4, prof_test)
+test_predict <- as.data.frame(test_predict)
+write.csv(test_predict,"G:/My Drive/1 SEM/MG-GY-9753 Business Analytics/Project_2/test_predict.csv")
+prop.table(table(test_predict))
+```
+
+
+
+
+
+

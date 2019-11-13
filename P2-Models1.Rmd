@@ -1,0 +1,200 @@
+---
+title: "Project 2"
+author: "Devarshi Pancholi"
+date: "11/6/2019"
+output: pdf_document
+---
+
+```{r}
+
+studentInfo <- read.csv("/Users/devarshipancholi/Desktop/BA/Project2/Datasets/studentInfo.csv")
+str(studentInfo)
+#View(studentInfo)
+```
+```{r}
+courses <- read.csv("/Users/devarshipancholi/Desktop/BA/Project2/Datasets/courses.csv")
+str(courses)
+#View(courses)
+assess <- read.csv("/Users/devarshipancholi/Desktop/BA/Project2/Datasets/assessments.csv")
+str(assess)
+vle <- read.csv("/Users/devarshipancholi/Desktop/BA/Project2/Datasets/vle.csv")
+str(vle)
+table(studentAssess$is_banked)
+```
+```{r}
+
+studentAssess <- read.csv("/Users/devarshipancholi/Desktop/BA/Project2/Datasets/studentAssessment.csv")
+str(studentAssess)
+#View(studentAssess)
+studentReg <- read.csv("/Users/devarshipancholi/Desktop/BA/Project2/Datasets/studentRegistration.csv")
+str(studentReg)
+studentVle <- read.csv("/Users/devarshipancholi/Desktop/BA/Project2/Datasets/studentVle.csv")
+str(studentVle)
+
+```
+
+```{r}
+
+s_asmt <- read.csv("studentAssessment.csv")
+asmt <- read_csv("assessments.csv") 
+student_assessment <- left_join(s_asmt,asmt, by.x="id_assessment",by.y="id_assessment")
+write.csv(student_assessment,"G:/My Drive/1 SEM/MG-GY-9753 Business Analytics/Project_2/std_asmt_joined.csv")
+tma <- student_assessment[ which(student_assessment$assessment_type=="TMA"),]
+cma <- student_assessment[ which(student_assessment$assessment_type=="CMA"),]
+exam<- student_assessment[ which(student_assessment$assessment_type=="Exam"),]
+
+```
+
+```{r}
+
+#Clean the outlier of the sum_click, by cleaning the outlier
+median<-median(studentVle$sum_click)
+mean<-mean(studentVle$sum_click)
+sd<-sd(studentVle$sum_click)
+
+
+student_Vle<-subset(studentVle,studentVle$sum_click<(3*sd+mean)&studentVle$sum_click>(-3*sd+mean))
+
+summary(student_Vle$sum_click)
+#boxplot(student_Vle$sum_click)
+#View(student_Vle)
+
+student_Vle<-as.data.frame(student_Vle)
+library(dplyr)
+student_vle <- student_Vle %>%
+  group_by(id_student,code_module, code_presentation) %>%
+  summarize(sum_click= sum(sum_click))
+
+#write.csv(student_vle, "~/Downloads/student_vle.csv")
+
+summary(student_vle$sum_click)
+
+#View(student_vle)
+
+student_vle$engagement<-cut(student_vle$sum_click,breaks =c(1,237,655,1115,1472,16164), 
+              labels = c("Very Low Engagement","Low Engagement", "Average Engagement","High Engagement","Very High Engagement"))
+student_vle$engagement<-as.factor(student_vle$engagement)
+#table(student_vle$engagement)
+#write.csv(student_vle, "~/Downloads/student_vle2.csv")
+summary(student_vle)
+View(student_vle)
+summary(studentInfo)
+
+```
+
+```{r}
+
+library(dplyr)
+stuInfoVle <- left_join(studentInfo,student_vle, by = c("id_student","code_module","code_presentation"))
+df1= as.data.frame(stuInfoVle)
+write.csv(df1,"~/Downloads/stuInfoVle.csv")
+View(stuInfoVle)
+
+```
+
+```{r}
+
+str(stuInfoVle)
+summary(stuInfoVle)
+table(stuInfoVle$final_result)
+
+```
+
+```{r}
+library(dplyr)
+final= read.csv("/Users/devarshipancholi/Desktop/df3_1.csv")
+
+str(final)
+
+dataset <- select(final,
+                  code_module,code_presentation,gender,
+                  region,highest_education,imd_band,
+                  studied_credits,num_of_prev_attempts,
+                  age_band,disability,sum_click,assessment_type,score,weight,final_result)
+
+
+target <- ("final_result")
+dependent <- (names(dataset)[names(dataset) != target])
+
+library(ROSE)
+
+set.seed(1234)
+split <- (.70)
+library (caret)
+library(kernlab)
+library(xgboost)
+index <- createDataPartition(dataset$final_result, p=split, list=FALSE)
+
+train.df <- as.data.frame(dataset[ index,])
+library(DMwR)
+train_smote <- SMOTE( final_result ~ ., train.df, perc.over = 100, perc.under = 200)
+prop.table(table(train_smote$final_result))
+train.df = train_smote
+test.df <- as.data.frame(dataset[ -index,])
+
+#train.under<-ovun.sample(APPLICANT ~., data = train.df, method = "under", N= 1000)$data
+#prop.table(table(train.under$APPLICANT))
+
+#admit$APPLICANT<-as.factor(admit$APPLICANT)
+
+fitControl <- trainControl(method = "cv", number = 20, sampling = "up", classProbs = TRUE)
+
+#lm <- (train(train.df[,dependent],train.df[,target], method='glm'))
+gbm <- train(train.df[,dependent],train.df[,target], method='gbm', trControl = fitControl)
+
+summary(gbm)
+
+```
+
+```{r}
+
+gbm.predict <- predict(gbm,test.df[,dependent],type="raw")
+#lm.predict <- predict(lm,test.df[,dependent],type="raw")
+#summary(gbm.predict)
+
+
+
+r <- data.frame(Actual = test.df$final_result , Prediction = gbm.predict)
+r <- table(r)
+r
+
+accuracy <- (r[1,1] + r[2,2])/sum(r)
+accuracy
+
+precision <- (r[2,2]/(r[2,2] + r[1,2]))
+precision
+
+recall <- (r[2,2]/(r[2,2] + r[2,1]))
+recall
+
+f_score <- 2*((precision*recall)/(precision+recall))
+f_score
+
+g_score <- sqrt(precision*recall)
+g_score
+
+library(pROC)
+
+gbm.probs <- predict(gbm,test.df[,dependent],type="prob")    
+#rf.probs <- predict(rf,test.df[,dependent],type="prob") 
+
+gbm.plot<-plot(roc(test.df$final_result,gbm.probs[,2]))
+#rf.plot<-lines(roc(test.df$final_result,rf.probs[,2]), col="blue")
+
+confusionMatrix(gbm.predict,test.df[,target], positive = "Pass")
+multiclass.roc(test.df$final_result, predict(gbm, test.df[,dependent], type= "prob", percent=FALSE))
+
+confusionMatrix(lm.predict,test.df[,target], positive = "Pass")
+multiclass.roc(test.df$final_result, predict(lm, test.df[,dependent], type= "prob", percent=FALSE))
+
+```
+
+
+
+
+
+
+
+
+
+

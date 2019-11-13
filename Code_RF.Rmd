@@ -1,0 +1,148 @@
+---
+title: "Untitled"
+author: "Pingjing Wang"
+date: "11/10/2019"
+output: html_document
+---
+
+# library packages
+```{r}
+library(dplyr)
+library(dataQualityR)
+library(readr)
+library(tidyr)
+library(randomForest)
+library(DMwR)
+library(ROSE)
+library(pROC)
+library(caret)
+```
+
+# load data
+```{r}
+assessments <- read_csv("assessments.csv")
+studentAssessment <- read_csv("studentAssessment.csv")
+studentRegistration <- read_csv("studentRegistration.csv")
+studentVle <- read_csv("studentVle.csv")
+vle <- read_csv("vle.csv")
+studentInfo <- read_csv("studentInfo.csv")
+studentInfo = subset(studentInfo, final_result!="Withdrawn")
+info = as.data.frame(studentInfo)
+```
+
+```{r}
+info <- info[, -1]
+info$imd_band[info$imd_band =="20-Oct"] <- as.character("10-20%")
+info$imd_band <- as.factor(info$imd_band)
+info$age_band <- as.factor(info$age_band)
+info$disability <- as.factor(info$disability)
+info$code_module <- as.factor(info$code_module)
+info$code_presentation <- as.factor(info$code_presentation)
+info$gender <- as.factor(info$gender)
+info$region <- as.factor(info$region)
+info$highest_education <- as.factor(info$highest_education)
+info$num_of_prev_attempts <- as.factor(info$num_of_prev_attempts)
+info$studied_credits <- as.factor(info$studied_credits)
+info$final_result <- as.factor(info$final_result)
+info <- subset(info, final_result != "Withdrawn") # delete withdrawn student
+info$final_result <- factor(info$final_result) # drop "Withdrawn" level
+info$final_result[info$final_result == "Distinction"] <- "Pass"
+info$final_result <- factor(info$final_result) # drop "Distinction" level
+```
+# join data (first)
+```{r}
+dataset <- left_join(studentAssessment, assessments,by.x= "id_assessment",by.y = "id_assessment" )
+dataset1 <- left_join(info, dataset,by.x= "id_student",by.y = "id_student" )
+dataset2 <- left_join(studentVle, vle,by.x= "id_site",by.y = "id_site" )
+dataset3 <- left_join(dataset1, dataset2,by.x= "id_student",by.y = "id_student" )
+dataset3$week_from =NULL
+dataset3$week_to =NULL
+dataset4 = na.omit(dataset3) #Removing Duplicates
+
+```
+
+
+# preparing for model
+```{r}
+# select variables in the df3
+dataset5 <- select(dataset4, 
+                  code_module, code_presentation, gender, region, highest_education, imd_band,
+                  studied_credits, num_of_prev_attempts, age_band, disability, assessment_type,activity_type,
+                  sum_click, weight, score, final_result)
+#write.csv(dataset5, "G:/My Drive/1 SEM/MG-GY-9753 Business Analytics/Project_2/dataset5.csv")
+# dataset6 = dataset5[(nrow(dataset5)/2):nrow(dataset5),]
+# dataset5 = dataset5[1:(nrow(dataset5)/2),]
+# dataset6 = dataset5[(nrow(dataset5)/2):nrow(dataset5),]
+set.seed(12345)
+split <- (.5)
+index <- createDataPartition(dataset5$final_result, p = split, list = FALSE)
+train.df <- dataset5[index, ] # training data
+test.df <- dataset5[-index, ] # testing data
+
+train.df$studied_credits <- as.integer(train.df$studied_credits)
+test.df$studied_credits <- as.integer(test.df$studied_credits)
+train.df <- train.df %>% mutate_if(is.character, as.factor)
+test.df <- test.df %>% mutate_if(is.character, as.factor)
+
+v =table(train.df$final_result)
+
+train.under <- ovun.sample(final_result~., data = train.df, method = "under", N = v[1]*2)$data
+prop.table(table(train.under$final_result))
+
+train.over <- ovun.sample(final_result~., data = train.df, method = "over", N = v[2]*2)$data
+prop.table(table(train.under$final_result))
+
+train.both <- ovun.sample(final_result~., data = train.df, method = "both", N = v[2]*2)$data
+prop.table(table(train.both$final_result))
+```
+
+```{r}
+test.df <- rbind(train.df[1, ] , test.df)
+test.df <- test.df[-1,]
+
+rf_model1 <- randomForest(final_result ~ .,
+                          data = train.df, 
+                          ntree = 100)
+summary(rf_model1)
+class(test.df$final_result)
+rf_predict1 <- predict(rf_model1, test.df)
+
+confusionMatrix(rf_predict1, test.df$final_result, positive = "Pass") #80/20 SPlit
+multiclass.roc(test.df$final_result, predict(rf_model1, test.df[,1:15], type= "prob", percent=FALSE))
+```
+
+```{r}
+rf_model2 <- randomForest(final_result ~ .,
+                          data = train.under, 
+                          ntree = 100)
+rf_predict2 <- predict(rf_model2, test.df)
+confusionMatrix(rf_predict2, test.df$final_result, positive = "Pass")
+
+rf_model3 <- randomForest(final_result ~ .,
+                          data = train.over, 
+                          ntree = 100)
+rf_predict3 <- predict(rf_model3, test.df)
+confusionMatrix(rf_predict3, test.df$final_result, positive = "Pass")
+
+rf_model4 <- randomForest(final_result ~ .,
+                          data = train.both, 
+                          ntree = 100)
+rf_predict4 <- predict(rf_model4, test.df)
+confusionMatrix(rf_predict4, test.df$final_result, positive = "Pass")
+
+```
+#Testing the results on test Dataset
+```{r}
+prof_test <- read.csv("G:/My Drive/1 SEM/MG-GY-9753 Business Analytics/Project_2/StudentTestFiles_tobeScored.csv")
+prof_test <- select(prof_test, 
+                  code_module, code_presentation, gender, region, highest_education, imd_band,
+                  studied_credits, num_of_prev_attempts, age_band, disability, assessment_type,activity_type,
+                  sum_click, weight, score)
+
+
+
+
+```
+
+
+
