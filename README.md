@@ -1,5 +1,4 @@
 # R-Student-Outcome-Prediction
-Kaggle style modeling competition where our team stood first in the class. 
 7 different datasets were provided across which there were important information about Student's performance across the Semester.
 First, we joined those 7 different datasets using MySQL. We got a resultant dataset of about 500,000 instances.
 After performing Exploratory Data Analysis we dug deep into the analysis of the given data using RStudio.
